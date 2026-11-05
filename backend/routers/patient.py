@@ -22,6 +22,7 @@ class AITriageRequest(BaseModel):
     symptoms: str
     target_language: str = "en"
     injury_image_url: Optional[str] = None
+    gemini_api_key: Optional[str] = None
 
 class SummarizeReportRequest(BaseModel):
     report_text: str
@@ -61,7 +62,8 @@ async def run_ai_triage(
     result = await triage_symptoms_and_injury(
         symptoms_text=req.symptoms,
         injury_image_url=req.injury_image_url,
-        target_lang=req.target_language
+        target_lang=req.target_language,
+        api_key=req.gemini_api_key
     )
     return result
 

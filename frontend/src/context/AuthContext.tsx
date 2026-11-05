@@ -49,9 +49,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       org_id: user.org_id || '',
       uhid: user.uhid || ''
     });
-    // Connect to backend WebSocket on port 8000
-    const host = window.location.hostname || 'localhost';
-    const wsUrl = `${protocol}//${host}:8000/ws?${params.toString()}`;
+    // Connect to WebSocket: port 8000 in Vite dev, or current host in production
+    const isViteDev = window.location.port === '5173';
+    const host = isViteDev ? `${window.location.hostname}:8000` : window.location.host;
+    const wsUrl = `${protocol}//${host}/ws?${params.toString()}`;
 
     let socket: WebSocket | null = null;
     let pingInterval: number | null = null;

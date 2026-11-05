@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import {
   Siren, Bot, FileText, Search, Pill, Clock, AlertTriangle,
-  CheckCircle2, Languages, Shield, ArrowRight, Hospital, Stethoscope, Store
+  CheckCircle2, Languages, Shield, ArrowRight, Hospital, Stethoscope, Store,
+  Mic, MicOff, Volume2, VolumeX, Sparkles, Key
 } from 'lucide-react';
 
 export const PatientDashboard: React.FC = () => {
@@ -18,6 +19,24 @@ export const PatientDashboard: React.FC = () => {
   const [triageLang, setTriageLang] = useState('en');
   const [triageResult, setTriageResult] = useState<any>(null);
   const [triageLoading, setTriageLoading] = useState(false);
+
+  // Voice to Type (Speech-to-Text) & Voice Output (Text-to-Speech) State
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const [speechError, setSpeechError] = useState('');
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [autoSpeakReply, setAutoSpeakReply] = useState(true);
+  const [geminiApiKey, setGeminiApiKey] = useState(localStorage.getItem('gemini_custom_key') || '');
+  const [showGeminiConfig, setShowGeminiConfig] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  // Check speech recognition support
+  useEffect(() => {
+    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) {
+      setSpeechSupported(false);
+    }
+  }, []);
 
   // Hospital Discovery "Table" Filter State
   const [filterCity, setFilterCity] = useState('Visakhapatnam');
@@ -80,6 +99,122 @@ export const PatientDashboard: React.FC = () => {
     }
   };
 
+  const startListening = () => {
+    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) {
+      setSpeechError('Speech recognition is not supported in this browser. Please use Google Chrome, Edge, or Brave.');
+      return;
+    }
+
+    setSpeechError('');
+    try {
+      const recognition = new SpeechRec();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      // Map language code for recognition
+      const langMap: Record<string, string> = {
+        'te': 'te-IN',
+        'hi': 'hi-IN',
+        'en': 'en-IN',
+        'ta': 'ta-IN',
+        'kn': 'kn-IN'
+      };
+      recognition.lang = langMap[triageLang] || 'en-IN';
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = 0; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript + ' ';
+        }
+        if (transcript.trim()) {
+          setTriageSymptoms(transcript.trim());
+
+          // Auto-detect script language if set to auto or for smart switching
+          for (const ch of transcript) {
+            if (ch >= '\u0c00' && ch <= '\u0c7f') { setTriageLang('te'); break; }
+            if (ch >= '\u0900' && ch <= '\u097f') { setTriageLang('hi'); break; }
+            if (ch >= '\u0b80' && ch <= '\u0bff') { setTriageLang('ta'); break; }
+            if (ch >= '\u0c80' && ch <= '\u0cff') { setTriageLang('kn'); break; }
+          }
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn('Speech recognition notice:', event.error);
+        if (event.error === 'not-allowed') {
+          setSpeechError('Microphone access was blocked. Please click the lock/tune icon in the browser address bar and allow Microphone.');
+        } else if (event.error !== 'no-speech') {
+          setSpeechError(`Voice notice: ${event.error}`);
+        }
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err: any) {
+      setSpeechError(err.message || 'Could not start voice recognition.');
+      setIsListening(false);
+    }
+  };
+
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+    setIsListening(false);
+  };
+
+  const speakVoiceReply = (textToSpeak: string, langCode: string) => {
+    if (!('speechSynthesis' in window)) {
+      return;
+    }
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    const bcpMap: Record<string, string> = {
+      'te': 'te-IN',
+      'hi': 'hi-IN',
+      'en': 'en-IN',
+      'ta': 'ta-IN',
+      'kn': 'kn-IN'
+    };
+    utterance.lang = bcpMap[langCode] || 'en-IN';
+    utterance.rate = 0.92; // Slightly measured, clear cadence for medical advice
+    utterance.pitch = 1.0;
+
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const stopSpeaking = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+  };
+
+  const handleSaveGeminiKey = (key: string) => {
+    setGeminiApiKey(key);
+    localStorage.setItem('gemini_custom_key', key);
+    setShowGeminiConfig(false);
+  };
+
   const runAITriage = async () => {
     try {
       setTriageLoading(true);
@@ -87,12 +222,17 @@ export const PatientDashboard: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           symptoms: triageSymptoms,
-          target_language: triageLang
+          target_language: triageLang,
+          gemini_api_key: geminiApiKey || undefined
         })
       });
       const data = await res.json();
       if (res.ok) {
         setTriageResult(data);
+        if (autoSpeakReply && (data.voice_reply_text || data.triage_advice)) {
+          const speakText = data.voice_reply_text || data.triage_advice;
+          speakVoiceReply(speakText, data.language || triageLang);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -550,77 +690,337 @@ export const PatientDashboard: React.FC = () => {
       {/* ================= TAB 2: MULTILINGUAL AI TRIAGE (FEATURE 3.1) ================= */}
       {activeTab === 'triage' && (
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center space-x-2 text-indigo-700">
               <Bot className="w-6 h-6" />
-              <h2 className="text-lg font-bold">Feature 3.1: Multilingual AI Symptom & Injury Vision Triage</h2>
-            </div>
-            <div className="flex items-center space-x-2 text-xs">
-              <Languages className="w-4 h-4 text-slate-500" />
-              <select
-                value={triageLang}
-                onChange={e => setTriageLang(e.target.value)}
-                className="p-1.5 border border-slate-300 rounded font-semibold text-slate-700"
-              >
-                <option value="en">English (Indian English)</option>
-                <option value="te">తెలుగు (Telugu)</option>
-                <option value="hi">हिंदी (Hindi)</option>
-              </select>
-            </div>
-          </div>
-
-          <p className="text-xs text-slate-500">
-            Powered by Gemini AI microservice. Classifies severity (LOW vs MODERATE vs CRITICAL) and recommends whether you should visit a Local Primary Clinic (for headaches/minor cuts) or a Multi-Specialty Hospital (for fractures/chest pain).
-          </p>
-
-          <div className="space-y-3">
-            <textarea
-              rows={3}
-              value={triageSymptoms}
-              onChange={e => setTriageSymptoms(e.target.value)}
-              placeholder="Describe your symptoms (e.g. sharp chest pain, high fever, minor finger cut)..."
-              className="w-full text-xs p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-            />
-
-            <button
-              onClick={runAITriage}
-              disabled={triageLoading}
-              className="py-2.5 px-5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow transition flex items-center space-x-2"
-            >
-              <Bot className="w-4 h-4" />
-              <span>{triageLoading ? 'Analyzing Clinical Biomarkers...' : 'Run Multilingual AI Triage'}</span>
-            </button>
-          </div>
-
-          {triageResult && (
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-xs">
-              <div className="flex items-center justify-between">
-                <span className={`px-2.5 py-1 rounded-full font-bold text-[11px] ${
-                  triageResult.severity_level === 'CRITICAL'
-                    ? 'bg-rose-100 text-rose-800'
-                    : triageResult.severity_level === 'MODERATE'
-                    ? 'bg-amber-100 text-amber-800'
-                    : 'bg-emerald-100 text-emerald-800'
-                }`}>
-                  Severity Classification: {triageResult.severity_level}
-                </span>
-                <span className="font-bold text-slate-700">
-                  Recommended Tier: <strong className="text-indigo-700">{triageResult.facility_type_recommended}</strong>
-                </span>
+              <div>
+                <h2 className="text-lg font-bold">Feature 3.1: Multilingual AI Voice Triage & Doctor Voice Reply</h2>
+                <p className="text-[11px] text-slate-500">Google in-built voice-to-text with auto-detect or language selection & Gemini AI</p>
               </div>
+            </div>
 
-              <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
-                <p className="font-bold text-slate-800">Suggested Specialist: {triageResult.suggested_specialist}</p>
-                <p className="text-slate-600 leading-relaxed">{triageResult.triage_advice}</p>
-              </div>
-
+            <div className="flex items-center flex-wrap gap-2 text-xs">
+              {/* Gemini Model Badge & Config Toggle */}
               <button
-                onClick={() => setActiveTab('hospitals')}
-                className="text-indigo-600 hover:text-indigo-800 font-bold flex items-center space-x-1"
+                onClick={() => setShowGeminiConfig(!showGeminiConfig)}
+                className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 text-purple-800 font-bold hover:bg-purple-100 transition shadow-sm"
+                title="Configure Gemini Free Unlimited Access API Key"
               >
-                <span>Find matching {triageResult.facility_type_recommended} in Hospital Discovery Table</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                <Sparkles className="w-3.5 h-3.5 text-purple-600 animate-pulse" />
+                <span>{geminiApiKey ? 'Gemini 2.0 Flash (Custom Key)' : 'Gemini 2.0 Flash (Free Tier)'}</span>
+                <Key className="w-3 h-3 text-purple-500 ml-1" />
               </button>
+
+              {/* Language Selector */}
+              <div className="flex items-center space-x-1.5 p-1 bg-slate-100 rounded-lg border border-slate-200">
+                <Languages className="w-3.5 h-3.5 text-slate-500" />
+                <select
+                  value={triageLang}
+                  onChange={e => setTriageLang(e.target.value)}
+                  className="bg-transparent font-semibold text-slate-700 text-xs focus:outline-none cursor-pointer"
+                >
+                  <option value="auto">🌐 Auto Detect Language (ఆటో / ऑटो)</option>
+                  <option value="te">🇮🇳 తెలుగు (Telugu)</option>
+                  <option value="hi">🇮🇳 हिंदी (Hindi)</option>
+                  <option value="en">🇮🇳 English (Indian English)</option>
+                  <option value="ta">🇮🇳 தமிழ் (Tamil)</option>
+                  <option value="kn">🇮🇳 ಕನ್ನಡ (Kannada)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Gemini API Key Configuration Drawer */}
+          {showGeminiConfig && (
+            <div className="p-4 bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 border border-purple-200 rounded-xl space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-extrabold text-purple-900 flex items-center space-x-1.5">
+                  <Sparkles className="w-4 h-4 text-purple-600" />
+                  <span>Google Gemini Free Unlimited API Configuration</span>
+                </span>
+                <button
+                  onClick={() => setShowGeminiConfig(false)}
+                  className="text-slate-400 hover:text-slate-600 font-bold text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="text-slate-600 leading-relaxed">
+                Google provides <strong>100% free unlimited rate-limited access</strong> to <strong>Gemini 2.0 Flash</strong> & <strong>Gemini 1.5 Flash</strong> via Google AI Studio (zero credit card required). You can paste your key below or add it to <code className="bg-white px-1.5 py-0.5 rounded text-purple-700 font-mono">backend/.env</code> as <code className="bg-white px-1.5 py-0.5 rounded text-purple-700 font-mono">GEMINI_API_KEY=...</code>.
+              </p>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="password"
+                  placeholder="Paste your Gemini API Key (AIzaSy...)"
+                  value={geminiApiKey}
+                  onChange={e => setGeminiApiKey(e.target.value)}
+                  className="flex-1 p-2 bg-white border border-purple-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                />
+                <button
+                  onClick={() => handleSaveGeminiKey(geminiApiKey)}
+                  className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white font-bold rounded-lg shadow-sm transition"
+                >
+                  Save Key
+                </button>
+                {geminiApiKey && (
+                  <button
+                    onClick={() => handleSaveGeminiKey('')}
+                    className="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-lg transition"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                💡 Don't have a key? Leave it blank — our built-in offline clinical intelligence engine will instantly handle Telugu, Hindi, and English triage and audio synthesis!
+              </p>
+            </div>
+          )}
+
+          {/* Speech Error Banner if any */}
+          {speechError && (
+            <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs flex items-center justify-between">
+              <span>⚠️ {speechError}</span>
+              <button onClick={() => setSpeechError('')} className="font-bold text-amber-900 ml-2">✕</button>
+            </div>
+          )}
+
+          {/* Input & Voice-to-Type Controls */}
+          <div className="space-y-3">
+            <div className="relative">
+              <textarea
+                rows={3}
+                value={triageSymptoms}
+                onChange={e => setTriageSymptoms(e.target.value)}
+                placeholder="Describe symptoms in Telugu, Hindi, or English (e.g. గుండె నొప్పి, सीने में दर्द, sharp chest pain)..."
+                className={`w-full text-xs p-3.5 pr-12 border rounded-xl focus:ring-2 focus:outline-none transition ${
+                  isListening
+                    ? 'border-rose-400 bg-rose-50/30 ring-2 ring-rose-300'
+                    : 'border-slate-300 focus:ring-indigo-500'
+                }`}
+              />
+
+              {/* Floating Mic Button inside textarea */}
+              <button
+                type="button"
+                onClick={isListening ? stopListening : startListening}
+                className={`absolute right-3 top-3 p-2 rounded-xl transition shadow-md flex items-center justify-center ${
+                  isListening
+                    ? 'bg-rose-600 text-white animate-pulse ring-4 ring-rose-200'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                }`}
+                title={isListening ? 'Click to stop listening' : 'Click to speak via Google In-Built Voice to Text'}
+              >
+                {isListening ? <MicOff className="w-4 h-4 animate-bounce" /> : <Mic className="w-4 h-4" />}
+              </button>
+            </div>
+
+            {/* Voice Control Toolbar & Listening Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={isListening ? stopListening : startListening}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-xs flex items-center space-x-1.5 transition ${
+                    isListening
+                      ? 'bg-rose-600 hover:bg-rose-700 text-white shadow animate-pulse'
+                      : 'bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 shadow-sm'
+                  }`}
+                >
+                  {isListening ? (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-white animate-ping mr-1" />
+                      <span>🔴 Listening... Speak now (Click to stop)</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>🎙️ Voice to Type (Google Voice-to-Text)</span>
+                    </>
+                  )}
+                </button>
+
+                {isListening && (
+                  <div className="flex items-center space-x-1 text-rose-600 font-mono text-[11px] animate-pulse">
+                    <span>Listening in {triageLang.toUpperCase()}</span>
+                    <span className="flex space-x-0.5">
+                      <span className="w-1 h-3 bg-rose-500 rounded-full animate-pulse" />
+                      <span className="w-1 h-4 bg-rose-600 rounded-full animate-bounce" />
+                      <span className="w-1 h-2 bg-rose-500 rounded-full animate-pulse" />
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Spoken Chips for Quick Testing */}
+              <div className="flex items-center space-x-1 text-[11px] text-slate-500 flex-wrap">
+                <span className="font-semibold text-slate-600">Quick Voice Test:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTriageSymptoms('గుండె నొప్పి మరియు శ్వాస తీసుకోవడం కష్టంగా ఉంది');
+                    setTriageLang('te');
+                  }}
+                  className="px-2 py-0.5 rounded bg-white hover:bg-slate-100 border border-slate-200 text-indigo-700 font-medium text-[10px]"
+                >
+                  🇮🇳 గుండె నొప్పి (Telugu)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTriageSymptoms('सीने में बहुत तेज़ दर्द और सांस लेने में तकलीफ');
+                    setTriageLang('hi');
+                  }}
+                  className="px-2 py-0.5 rounded bg-white hover:bg-slate-100 border border-slate-200 text-indigo-700 font-medium text-[10px]"
+                >
+                  🇮🇳 सीने में दर्द (Hindi)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTriageSymptoms('Severe headache and mild dizziness for 2 days');
+                    setTriageLang('en');
+                  }}
+                  className="px-2 py-0.5 rounded bg-white hover:bg-slate-100 border border-slate-200 text-indigo-700 font-medium text-[10px]"
+                >
+                  🇮🇳 Mild Headache (Eng)
+                </button>
+              </div>
+            </div>
+
+            {/* Run Triage Button & Auto-speak Toggle */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <button
+                onClick={runAITriage}
+                disabled={triageLoading}
+                className="py-2.5 px-6 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold rounded-xl text-xs shadow-md transition flex items-center space-x-2"
+              >
+                <Bot className="w-4 h-4" />
+                <span>{triageLoading ? 'Gemini AI Analyzing Symptoms...' : 'Run Multilingual AI Triage (AI విశ్లేషణ)'}</span>
+              </button>
+
+              <label className="flex items-center space-x-2 text-xs text-slate-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoSpeakReply}
+                  onChange={e => setAutoSpeakReply(e.target.checked)}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                />
+                <Volume2 className="w-4 h-4 text-indigo-600" />
+                <span className="font-semibold">Auto-speak Doctor's voice reply in patient's language</span>
+              </label>
+            </div>
+          </div>
+
+          {/* AI Triage Result with Voice Output Player */}
+          {triageResult && (
+            <div className="p-5 bg-gradient-to-br from-slate-50 via-indigo-50/20 to-white border border-slate-200 rounded-2xl space-y-4 text-xs shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
+                <div className="flex items-center space-x-2">
+                  <span className={`px-3 py-1 rounded-full font-extrabold text-[11px] ${
+                    triageResult.severity_level === 'CRITICAL'
+                      ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                      : triageResult.severity_level === 'MODERATE'
+                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                      : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  }`}>
+                    Severity: {triageResult.severity_level}
+                  </span>
+                  <span className="font-bold text-slate-700">
+                    Recommended: <strong className="text-indigo-700">{triageResult.facility_type_recommended}</strong>
+                  </span>
+                </div>
+
+                <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                  {triageResult.ai_model_used || 'Gemini 2.0 Flash'}
+                </span>
+              </div>
+
+              {/* Spoken Voice Advice Card */}
+              <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2 text-emerald-800 font-bold text-xs">
+                    <Volume2 className="w-4 h-4 text-emerald-700" />
+                    <span>🔊 Spoken Doctor's Voice Advice ({triageResult.language === 'te' ? 'తెలుగు' : triageResult.language === 'hi' ? 'हिंदी' : 'English'})</span>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (isSpeaking) {
+                        stopSpeaking();
+                      } else {
+                        speakVoiceReply(
+                          triageResult.voice_reply_text || triageResult.triage_advice,
+                          triageResult.language || triageLang
+                        );
+                      }
+                    }}
+                    className={`px-3 py-1 rounded-lg font-bold text-xs flex items-center space-x-1.5 transition shadow-sm ${
+                      isSpeaking
+                        ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    }`}
+                  >
+                    {isSpeaking ? (
+                      <>
+                        <VolumeX className="w-3.5 h-3.5" />
+                        <span>Stop Voice</span>
+                      </>
+                    ) : (
+                      <>
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>Listen to Advice (వినండి / सुनिए)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <p className="text-emerald-950 font-medium leading-relaxed italic text-sm">
+                  "{triageResult.voice_reply_text || triageResult.triage_advice}"
+                </p>
+
+                {isSpeaking && (
+                  <div className="flex items-center space-x-1 text-emerald-700 text-[11px] font-mono pt-1">
+                    <span>Speaking in patient's native tongue...</span>
+                    <span className="flex space-x-1">
+                      <span className="w-1 h-3 bg-emerald-600 rounded-full animate-bounce" />
+                      <span className="w-1 h-4 bg-emerald-700 rounded-full animate-pulse" />
+                      <span className="w-1 h-2 bg-emerald-600 rounded-full animate-bounce" />
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Clinical Details */}
+              <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1.5">
+                <p className="font-bold text-slate-800 text-xs">
+                  Suggested Specialist: <span className="text-indigo-700">{triageResult.suggested_specialist}</span>
+                </p>
+                <p className="text-slate-600 leading-relaxed text-xs">{triageResult.triage_advice}</p>
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <button
+                  onClick={() => setActiveTab('hospitals')}
+                  className="text-indigo-600 hover:text-indigo-800 font-bold flex items-center space-x-1"
+                >
+                  <span>Find matching {triageResult.facility_type_recommended} in Hospital Discovery Table</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+
+                {triageResult.severity_level === 'CRITICAL' && (
+                  <button
+                    onClick={() => {
+                      setActiveTab('sos');
+                      triggerSOS();
+                    }}
+                    className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs shadow flex items-center space-x-1 animate-pulse"
+                  >
+                    <Siren className="w-3.5 h-3.5" />
+                    <span>Trigger Immediate SOS</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: arogyaflow
+    runtime: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    region: singapore # Closest to India
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: GEMINI_API_KEY
+        sync: false

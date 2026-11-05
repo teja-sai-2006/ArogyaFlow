@@ -1,0 +1,23 @@
+services:
+  arogyaflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arogyaflow_app
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - DATABASE_URL=sqlite:///./arogyaflow.db
+      - PORT=8000
+    volumes:
+      - arogyaflow_data:/app/backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  arogyaflow_data:

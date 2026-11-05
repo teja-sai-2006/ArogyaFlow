@@ -163,13 +163,24 @@ async function runBrowserTests() {
     await page.screenshot({ path: path.join(screenshotsDir, '10_patient_emergency_sos.png') });
     console.log('  📸 Screenshot captured: 10_patient_emergency_sos.png');
 
-    // Test 9c: Multilingual AI Triage Tab
-    console.log('  🤖 Testing Multilingual AI Triage Tab in browser...');
+    // Test 9c: Multilingual AI Triage & Voice Tab
+    console.log('  🤖 Testing Multilingual AI Triage & Voice-to-Type in browser...');
     await page.click('button:has-text("Multilingual AI Triage")');
     await page.waitForTimeout(500);
+    assert('Voice to Type Button Present', await page.locator('text=Voice to Type').first().isVisible());
+    assert('Gemini Model Badge Present', await page.locator('text=Gemini 2.0 Flash').first().isVisible());
+
+    // Test Quick Telugu Voice Chip
+    console.log('  🗣️ Testing Telugu Voice Symptom Chip...');
+    await page.click('button:has-text("గుండె నొప్పి")');
+    await page.waitForTimeout(300);
+
+    // Run Triage
     await page.click('button:has-text("Run Multilingual AI Triage")');
-    await page.waitForSelector('text=Severity Classification', { timeout: 8000 });
-    assert('AI Triage Result Displayed', await page.locator('text=Severity Classification').first().isVisible());
+    await page.waitForSelector('text=Severity:', { timeout: 8000 });
+    assert('AI Triage Result Displayed', await page.locator('text=Severity:').first().isVisible());
+    assert('Telugu Voice Advice Card Displayed', await page.locator('text=Spoken Doctor\'s Voice Advice (తెలుగు)').first().isVisible());
+    assert('Listen to Advice Audio Button Present', await page.locator('text=Listen to Advice').first().isVisible());
     await page.screenshot({ path: path.join(screenshotsDir, '11_patient_ai_triage.png') });
     console.log('  📸 Screenshot captured: 11_patient_ai_triage.png');
 
